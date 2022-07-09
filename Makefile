@@ -4,3 +4,6 @@ task10:
 task20:
 	go build -o bin/$@ src/$@/main.go
 
+task30:
+	go build -o bin/$@ src/$@/main.go
+
