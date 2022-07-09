@@ -15,6 +15,16 @@ type duration struct {
 	s uint8
 }
 
+type task struct {
+	dur duration
+	num int
+}
+
+type queue struct {
+	tasks chan task
+	mu sync.Mutex
+}
+
 func main() {
 	var logFile, _ = os.OpenFile("log/default.log",
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666,
@@ -23,54 +33,70 @@ func main() {
 	log.SetOutput(logFile)
 
 	var capacity uint64
+	fmt.Printf("enter queue capacity: ")
 	fmt.Fscanf(os.Stdin, "%d", &capacity)
-	var queue = make(chan duration, capacity)
 
-	// var ch = make(chan duration)
+	var q = queue {tasks: make(chan task, capacity)}
 
-	var wg sync.WaitGroup
-	go readDuration("src/data.txt", queue)
-	// go runTaskQueue(queue, &wg)
-
-	// for n := 0; ; n++ {
-	// 	queue <- ch
-	// }
-
-	wg.Wait()
+	go readDuration("src/data.txt", &q)
+	runTaskQueue(&q)
 }
 
-func readDuration(filePath string, ch chan duration) {
+func readDuration(filePath string, q *queue) {
 	var file, e = os.Open(filePath)
+	if e != nil {
+		panic(e)
+	}
 	defer file.Close()
 
-	for {
+	for n := 1;; n++ {
 		var dur duration
-		fmt.Fscanf(file, "%dh%dm%ds\n", &dur.h, &dur.m, &dur.s)
+		var _, e = fmt.Fscanf(file, "%dh%dm%ds\n", &dur.h, &dur.m, &dur.s)
+
+		for len(q.tasks) == cap(q.tasks) {}
+		q.mu.Lock()
 
 		if e == io.EOF {
-			ch <- duration{}
-		}
-
-		ch <- dur
-		log.Printf("task pushed into the queue (%d/%d)\n", len(ch), cap(ch))
-	}
-}
-
-func runTask(dur duration, wg *sync.WaitGroup) {
-	log.Printf("task started\n")
-	time.Sleep(1000 * time.Millisecond)
-	log.Printf("task finished (%dh%dm%ds)", dur.h, dur.m, dur.s)
-	wg.Done()
-}
-
-func runTaskQueue(queue chan duration, wg *sync.WaitGroup) {
-	for {
-		var dur = <-queue
-		if dur.h == 0 && dur.m == 0 && dur.s == 0 {
+			q.tasks <- task{}
+			q.mu.Unlock()
 			break
 		}
 
-		wg.Add(1)
-		go runTask(dur, wg)
+		q.tasks <- task {dur, n}
+		log.Printf("push task (%d/%d)\n", len(q.tasks), (cap(q.tasks)))
+		q.mu.Unlock()
 	}
+}
+
+func runTask(t task, wg *sync.WaitGroup) {
+	var dur = &t.dur
+
+	log.Printf("task #%d started\n", t.num)
+	time.Sleep(100 * time.Millisecond)
+	log.Printf("task #%d finished (%dh%dm%ds)", t.num, dur.h, dur.m, dur.s)
+
+	wg.Done()
+}
+
+func runTaskQueue(q *queue) {
+	var wg sync.WaitGroup
+
+	for {
+		for len(q.tasks) == 0 {}
+		q.mu.Lock()
+
+		var t = <-q.tasks
+		var dur = &t.dur
+		if dur.h == 0 && dur.m == 0 && dur.s == 0 {
+			break
+		}
+		log.Printf("pop task (%d/%d)\n", len(q.tasks), cap(q.tasks))
+		
+		q.mu.Unlock()
+
+		wg.Add(1)
+		go runTask(t, &wg)
+	}
+
+	wg.Wait()
 }
